@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.networkchecker"
+    namespace = "com.routermanager.xpw300"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.networkchecker"
+        applicationId = "com.routermanager.xpw300"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -31,7 +31,7 @@ android {
     }
 
     buildFeatures {
-        viewBinding = false
+        viewBinding = true
     }
 }
 
@@ -41,5 +41,4 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 }

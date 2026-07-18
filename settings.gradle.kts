@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NetworkChecker"
+rootProject.name = "RouterManager"
 include(":app")
