@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.NetworkChecker" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#2962FF</item>
+        <item name="colorPrimaryVariant">#0039CB</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#0039CB</item>
+    </style>
+</resources>
