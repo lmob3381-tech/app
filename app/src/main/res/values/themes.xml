@@ -1,0 +1,8 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.AdGuardBrowser" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ag_primary</item>
+        <item name="colorPrimaryDark">@color/ag_primary_dark</item>
+        <item name="colorAccent">@color/ag_primary</item>
+        <item name="android:windowBackground">@color/ag_bg</item>
+    </style>
+</resources>

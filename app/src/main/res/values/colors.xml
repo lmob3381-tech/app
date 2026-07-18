@@ -1,0 +1,8 @@
+<resources>
+    <color name="ag_primary">#68BC71</color>
+    <color name="ag_primary_dark">#4C9A55</color>
+    <color name="ag_accent">#1F2937</color>
+    <color name="ag_bg">#0F1512</color>
+    <color name="ag_surface">#161D19</color>
+    <color name="ag_text_light">#F5F7F5</color>
+</resources>
