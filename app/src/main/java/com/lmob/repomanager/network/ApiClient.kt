@@ -1,5 +1,6 @@
 package com.lmob.repomanager.network
 
+import com.google.gson.GsonBuilder
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -32,10 +33,18 @@ object ApiClient {
             .addInterceptor(logging)
             .build()
 
+        // PENTING: Gson() default menyertakan field bernilai null di JSON output,
+        // misalnya GhDeleteTreeItem(sha = null) tetap terkirim sebagai "sha": null.
+        // GitHub Git Trees API menolak ini dengan 422 karena "sha": null dianggap
+        // field yang ADA tapi kosong, bukan field yang tidak dikirim sama sekali.
+        // GsonBuilder().create() (tanpa memanggil .serializeNulls()) akan MEN-SKIP
+        // field null saat serialize -- inilah yang kita butuhkan di sini.
+        val gson = GsonBuilder().create()
+
         return Retrofit.Builder()
             .baseUrl(BASE_URL)
             .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(GitHubApi::class.java)
     }
