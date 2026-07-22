@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 NetScan Console</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  @media (min-width: 800px) {
+    .grid { grid-template-columns: 1fr 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h2 {
+    font-size: 1rem;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .badge.ap { background: #1f6feb33; color: var(--accent); }
+  .badge.sta { background: #3fb95033; color: var(--green); }
+  button {
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0d1117;
+    color: var(--text);
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+  }
+  label { font-size: 0.78rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .status-line { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .status-line span:first-child { color: var(--muted); }
+  .progress { font-size: 0.75rem; color: var(--accent); margin-top: 8px; min-height: 16px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.up { background: var(--green); }
+  .dot.down { background: var(--red); }
+  .port-chip {
+    display: inline-block;
+    background: #1f6feb22;
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    margin: 1px;
+  }
+  .warn {
+    background: #f8514922;
+    border: 1px solid #f8514955;
+    color: #ffb4ae;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    margin-bottom: 12px;
+  }
+</style>
+</head>
+<body>
+
+<h1>📡 ESP32 NetScan Console</h1>
+<div class="sub">WiFi analyzer &amp; access-point deployer — kontrol via web</div>
+
+<div class="warn">⚠️ Gunakan hanya pada jaringan/perangkat milik sendiri atau yang sudah diizinkan.</div>
+
+<div class="grid">
+
+  <!-- STATUS -->
+  <div class="card">
+    <h2>Status Perangkat <span id="modeBadge" class="badge ap">AP</span></h2>
+    <div class="status-line"><span>IP</span><span id="stIp">-</span></div>
+    <div class="status-line"><span>AP SSID</span><span id="stApSsid">-</span></div>
+    <div class="status-line"><span>STA SSID</span><span id="stStaSsid">-</span></div>
+    <div class="status-line"><span>Klien terhubung ke AP</span><span id="stClients">-</span></div>
+    <div class="status-line"><span>Free heap</span><span id="stHeap">-</span></div>
+    <div class="status-line"><span>Uptime</span><span id="stUptime">-</span></div>
+  </div>
+
+  <!-- MODE CONTROL -->
+  <div class="card">
+    <h2>🔀 Mode Jaringan</h2>
+    <label>Deploy sebagai Access Point (SSID/Password sendiri)</label>
+    <input id="apSsidInput" placeholder="Nama WiFi (SSID)">
+    <input id="apPassInput" placeholder="Password (kosong = open, min 8 char)">
+    <button onclick="saveApConfig()">Simpan &amp; Jalankan AP</button>
+    <hr style="border-color: var(--border); margin: 14px 0;">
+    <label>Konek ke jaringan WiFi lain (untuk host scan)</label>
+    <input id="staSsidInput" placeholder="SSID target">
+    <input id="staPassInput" placeholder="Password" type="password">
+    <div class="row">
+      <button onclick="connectSta()">Konek (mode STA)</button>
+      <button class="secondary" onclick="switchToAp()">Kembali ke mode AP</button>
+    </div>
+  </div>
+
+  <!-- WIFI SCAN -->
+  <div class="card">
+    <h2>🛰️ Scan Jaringan WiFi Sekitar</h2>
+    <button onclick="startWifiScan()" id="btnWifiScan">Mulai Scan SSID</button>
+    <table>
+      <thead><tr><th>SSID</th><th>Ch</th><th>RSSI</th><th>Enkripsi</th><th>BSSID</th></tr></thead>
+      <tbody id="wifiScanBody"><tr><td colspan="5" style="color:var(--muted)">Belum ada data</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- HOST SCAN -->
+  <div class="card">
+    <h2>🔎 Scan Host di Jaringan (mini-nmap)</h2>
+    <div style="font-size:0.75rem;color:var(--muted);margin-bottom:8px;">
+      Butuh mode STA (konek ke jaringan) terlebih dulu. Melakukan ping sweep + cek port umum.
+    </div>
+    <button onclick="startHostScan()" id="btnHostScan">Mulai Host Scan</button>
+    <div class="progress" id="hostProgress"></div>
+    <table>
+      <thead><tr><th>IP</th><th>Status</th><th>Ping</th><th>Port Terbuka</th></tr></thead>
+      <tbody id="hostScanBody"><tr><td colspan="4" style="color:var(--muted)">Belum ada data</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function fetchJson(url, opts) {
+  const res = await fetch(url, opts);
+  return res.json();
+}
+
+function fmtUptime(s) {
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return `${h}h ${m}m ${sec}s`;
+}
+
+async function refreshStatus() {
+  try {
+    const d = await fetchJson('/api/status');
+    $('modeBadge').textContent = d.mode;
+    $('modeBadge').className = 'badge ' + (d.mode === 'AP' ? 'ap' : 'sta');
+    $('stIp').textContent = d.ip;
+    $('stApSsid').textContent = d.ap_ssid;
+    $('stStaSsid').textContent = d.sta_ssid || '-';
+    $('stClients').textContent = d.clients_connected_ap;
+    $('stHeap').textContent = (d.free_heap/1024).toFixed(1) + ' KB';
+    $('stUptime').textContent = fmtUptime(d.uptime_s);
+
+    $('apSsidInput').placeholder = d.ap_ssid;
+    $('staSsidInput').placeholder = d.sta_ssid || 'SSID target';
+
+    $('btnHostScan').disabled = (d.mode !== 'STA') || d.host_scan_running;
+    $('btnWifiScan').disabled = d.wifi_scan_running;
+
+    if (d.host_scan_running) {
+      $('hostProgress').textContent = '⏳ ' + d.host_scan_progress;
+    }
+  } catch(e) { /* device might be switching mode, ignore transient errors */ }
+}
+
+async function startWifiScan() {
+  $('btnWifiScan').disabled = true;
+  $('btnWifiScan').textContent = 'Scanning...';
+  await fetchJson('/api/wifi-scan/start');
+  const results = await fetchJson('/api/wifi-scan/result');
+  renderWifiScan(results);
+  $('btnWifiScan').disabled = false;
+  $('btnWifiScan').textContent = 'Mulai Scan SSID';
+}
+
+function renderWifiScan(list) {
+  const body = $('wifiScanBody');
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Tidak ada jaringan ditemukan</td></tr>';
+    return;
+  }
+  list.sort((a,b) => b.rssi - a.rssi);
+  body.innerHTML = list.map(n => `
+    <tr>
+      <td>${n.ssid || '<i>(hidden)</i>'}</td>
+      <td>${n.channel}</td>
+      <td>${n.rssi} dBm</td>
+      <td>${n.enc}</td>
+      <td style="color:var(--muted)">${n.bssid}</td>
+    </tr>
+  `).join('');
+}
+
+async function startHostScan() {
+  $('btnHostScan').disabled = true;
+  $('btnHostScan').textContent = 'Scanning...';
+  $('hostProgress').textContent = '⏳ memulai...';
+
+  const r = await fetchJson('/api/host-scan/start');
+  if (r.error) {
+    $('hostProgress').textContent = '❌ ' + r.error;
+    $('btnHostScan').disabled = false;
+    $('btnHostScan').textContent = 'Mulai Host Scan';
+    return;
+  }
+
+  const results = await fetchJson('/api/host-scan/result');
+  renderHostScan(results.hosts || []);
+  $('hostProgress').textContent = '✅ selesai';
+  $('btnHostScan').disabled = false;
+  $('btnHostScan').textContent = 'Mulai Host Scan';
+}
+
+function renderHostScan(list) {
+  const body = $('hostScanBody');
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">Tidak ada host aktif ditemukan</td></tr>';
+    return;
+  }
+  body.innerHTML = list.map(h => `
+    <tr>
+      <td><span class="dot up"></span>${h.ip}${h.self ? ' <span style="color:var(--muted)">(perangkat ini)</span>' : ''}</td>
+      <td>Aktif</td>
+      <td>${h.ping_ms !== undefined ? h.ping_ms.toFixed ? h.ping_ms.toFixed(1)+' ms' : h.ping_ms+' ms' : '-'}</td>
+      <td>${(h.open_ports || []).map(p => `<span class="port-chip">${p.port}/${p.service}</span>`).join(' ') || '<span style="color:var(--muted)">tidak ada</span>'}</td>
+    </tr>
+  `).join('');
+}
+
+async function saveApConfig() {
+  const ssid = $('apSsidInput').value.trim();
+  const pass = $('apPassInput').value;
+  if (!ssid) { alert('SSID wajib diisi'); return; }
+  const body = new URLSearchParams({ ssid, pass });
+  const r = await fetchJson('/api/config/ap', { method: 'POST', body });
+  alert(r.status || r.error);
+}
+
+async function connectSta() {
+  const ssid = $('staSsidInput').value.trim();
+  const pass = $('staPassInput').value;
+  if (!ssid) { alert('SSID wajib diisi'); return; }
+  const body = new URLSearchParams({ ssid, pass });
+  await fetchJson('/api/connect', { method: 'POST', body });
+  alert('Mencoba konek ke ' + ssid + '. Jika perangkatmu terputus dari WiFi ESP32, sambungkan kembali ke jaringan tersebut untuk melihat status.');
+}
+
+async function switchToAp() {
+  await fetchJson('/api/switch-ap', { method: 'POST' });
+  alert('Beralih ke mode AP. Sambungkan kembali ke SSID Access Point ESP32.');
+}
+
+refreshStatus();
+setInterval(refreshStatus, 3000);
+</script>
+</body>
+</html>
