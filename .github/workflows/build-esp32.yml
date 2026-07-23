@@ -1,0 +1,105 @@
+name: Compile ESP32
+
+on:
+  workflow_dispatch:
+    inputs:
+      sketch_dir:
+        description: "Folder source ESP32 di dalam repo"
+        required: false
+        default: "esp32-src"
+      fqbn:
+        description: "FQBN board ESP32"
+        required: false
+        default: "esp32:esp32:esp32"
+  push:
+    paths:
+      - "esp32-src/**"
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set vars
+        id: vars
+        run: |
+          SKETCH_DIR="${{ github.event.inputs.sketch_dir }}"
+          FQBN_IN="${{ github.event.inputs.fqbn }}"
+          [ -z "$SKETCH_DIR" ] && SKETCH_DIR="esp32-src"
+          [ -z "$FQBN_IN" ] && FQBN_IN="esp32:esp32:esp32"
+          if [ ! -d "$SKETCH_DIR" ]; then
+            echo "::error::Folder $SKETCH_DIR tidak ditemukan di repo"
+            exit 1
+          fi
+          echo "sketch_dir=$SKETCH_DIR" >> "$GITHUB_OUTPUT"
+          echo "fqbn=$FQBN_IN" >> "$GITHUB_OUTPUT"
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+
+      - name: Setup arduino-cli core ESP32
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Auto-detect sketch (.ino) atau platformio.ini
+        id: detect
+        run: |
+          SKETCH_DIR="${{ steps.vars.outputs.sketch_dir }}"
+          if [ -f "$SKETCH_DIR/platformio.ini" ]; then
+            echo "mode=platformio" >> "$GITHUB_OUTPUT"
+          else
+            INO_FILE=$(find "$SKETCH_DIR" -iname "*.ino" | head -n 1)
+            if [ -z "$INO_FILE" ]; then
+              echo "::error::Tidak ditemukan file .ino maupun platformio.ini di $SKETCH_DIR"
+              exit 1
+            fi
+            echo "mode=arduino-cli" >> "$GITHUB_OUTPUT"
+            echo "ino_dir=$(dirname "$INO_FILE")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install PlatformIO
+        if: steps.detect.outputs.mode == 'platformio'
+        run: pip install -U platformio
+
+      - name: Compile (PlatformIO)
+        if: steps.detect.outputs.mode == 'platformio'
+        run: |
+          cd "${{ steps.vars.outputs.sketch_dir }}"
+          pio run
+
+      - name: Compile (arduino-cli)
+        if: steps.detect.outputs.mode == 'arduino-cli'
+        run: |
+          arduino-cli compile --fqbn "${{ steps.vars.outputs.fqbn }}" \
+            --output-dir output-build \
+            "${{ steps.detect.outputs.ino_dir }}"
+
+      - name: Kumpulkan hasil build jadi satu folder
+        run: |
+          mkdir -p esp32-output
+          if [ -d output-build ]; then
+            cp -r output-build/* esp32-output/ 2>/dev/null || true
+          fi
+          if [ "${{ steps.detect.outputs.mode }}" = "platformio" ]; then
+            find "${{ steps.vars.outputs.sketch_dir }}/.pio/build" -maxdepth 2 \( -iname "*.bin" -o -iname "*.elf" -o -iname "*.map" \) -exec cp {} esp32-output/ \; 2>/dev/null || true
+          fi
+          ls -la esp32-output || true
+
+      - name: Zip hasil compile
+        run: |
+          cd esp32-output
+          zip -r ../esp32-hasil.zip .
+
+      - name: Upload artifact - hasil compile ESP32
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-hasil
+          path: esp32-hasil.zip
+          retention-days: 14
