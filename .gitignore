@@ -8,3 +8,6 @@
 .externalNativeBuild
 .cxx
 *.apk
+
+# Auto-added: jangan ignore APK di folder apk (dipakai workflow decompile)
+!apk/*.apk
