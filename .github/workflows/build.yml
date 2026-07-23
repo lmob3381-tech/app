@@ -1,15 +1,10 @@
 name: Decompile APK
 
-# Cara pakai:
-# 1. Commit file APK kamu ke folder apk/ (misal: apk/app.apk)
-# 2. Push ke repo, atau jalankan manual dari tab "Actions" -> "Decompile APK" -> "Run workflow"
-# 3. Tunggu selesai, lalu download hasilnya di bagian "Artifacts" pada run tersebut
-
 on:
   workflow_dispatch:
     inputs:
       apk_path:
-        description: "Path APK di dalam repo (relatif dari root)"
+        description: "Path APK di dalam repo"
         required: false
         default: "apk/app.apk"
   push:
@@ -31,11 +26,10 @@ jobs:
             APK_PATH=$(find apk -name "*.apk" | head -n 1)
           fi
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-            echo "::error::APK tidak ditemukan. Pastikan file ada di folder apk/ dan sudah di-commit."
+            echo "::error::APK tidak ditemukan di folder apk/"
             exit 1
           fi
           echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
-          echo "APK ditemukan: $APK_PATH"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -45,47 +39,29 @@ jobs:
 
       - name: Download JADX
         run: |
-          JADX_VERSION="1.5.1"
-          curl -L -o jadx.zip "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip"
+          curl -L -o jadx.zip "https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip"
           unzip -q jadx.zip -d jadx
           chmod +x jadx/bin/jadx
 
-      - name: Decompile APK to Java source (JADX)
+      - name: Decompile APK to Java source
         run: |
           mkdir -p output/java-source
-          ./jadx/bin/jadx \
-            --output-dir output/java-source \
-            --show-bad-code \
-            --no-res \
-            "${{ steps.vars.outputs.apk_path }}" || true
-          echo "Selesai decompile ke Java source."
+          ./jadx/bin/jadx --output-dir output/java-source --show-bad-code --no-res "${{ steps.vars.outputs.apk_path }}" || true
 
-      - name: Set up Python (untuk apktool via jdk, opsional resource decode)
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
-
-      - name: Download apktool (untuk decode resource: XML, layout, Manifest)
+      - name: Download apktool
         run: |
           mkdir -p apktool-bin
           curl -L -o apktool-bin/apktool.jar "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
-          curl -L -o apktool-bin/apktool "https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool"
-          chmod +x apktool-bin/apktool
 
-      - name: Decode resources (smali + XML + Manifest)
+      - name: Decode resources with apktool
         run: |
           mkdir -p output/apktool-decode
-          java -jar apktool-bin/apktool.jar decode \
-            "${{ steps.vars.outputs.apk_path }}" \
-            -o output/apktool-decode -f || true
-          echo "Selesai decode resource."
+          java -jar apktool-bin/apktool.jar decode "${{ steps.vars.outputs.apk_path }}" -o output/apktool-decode -f || true
 
       - name: Zip hasil
         run: |
           cd output
           zip -r ../decompiled-result.zip .
-          cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
