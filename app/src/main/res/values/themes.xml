@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.GitHubManager" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#24292F</item>
+        <item name="colorPrimaryDark">#161B22</item>
+        <item name="colorAccent">#2EA043</item>
+    </style>
+</resources>
