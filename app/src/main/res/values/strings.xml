@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">StreamLocal</string>
+    <string name="settings_title">Pengaturan Server</string>
+    <string name="player_title">Pemutar</string>
+
+    <string name="hint_search">Cari video atau musik…</string>
+    <string name="hint_server_url">http://127.0.0.1:4200</string>
+    <string name="label_server_url">Base URL Server</string>
+    <string name="label_save">Simpan</string>
+    <string name="label_test_connection">Tes Koneksi</string>
+    <string name="msg_connection_ok">Terhubung ke server ✓</string>
+    <string name="msg_connection_fail">Gagal terhubung: %1$s</string>
+    <string name="msg_url_empty">Base URL belum diisi</string>
+    <string name="msg_url_saved">Base URL disimpan</string>
+
+    <string name="tab_video">Video</string>
+    <string name="tab_music">Musik</string>
+
+    <string name="empty_search">Ketik sesuatu untuk mencari</string>
+    <string name="empty_history">Belum ada riwayat</string>
+    <string name="empty_results">Tidak ada hasil</string>
+
+    <string name="action_settings">Pengaturan</string>
+    <string name="action_history">Riwayat</string>
+    <string name="action_delete">Hapus</string>
+
+    <string name="msg_no_server_configured">Atur Base URL server dulu di Pengaturan</string>
+    <string name="msg_load_error">Gagal memuat: %1$s</string>
+</resources>

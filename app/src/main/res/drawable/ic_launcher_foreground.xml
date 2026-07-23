@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Play triangle di tengah -->
+    <path
+        android:fillColor="#4DE8D0"
+        android:pathData="M42,36 L74,54 L42,72 Z" />
+    <!-- Dua busur sinyal di kiri, melambangkan streaming -->
+    <path
+        android:strokeColor="#4DE8D0"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M22,40 A20,20 0 0 1 22,68" />
+    <path
+        android:strokeColor="#2E8C7F"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M14,32 A32,32 0 0 1 14,76" />
+</vector>

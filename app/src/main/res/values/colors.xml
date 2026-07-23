@@ -1,0 +1,21 @@
+<resources>
+    <!-- Base: near-black slate, bukan pure black -->
+    <color name="background">#0E1416</color>
+    <color name="surface">#161F22</color>
+    <color name="surface_raised">#1E2A2E</color>
+
+    <!-- Signature accent: cyan-teal terang, mengesankan "stream/pipa data" -->
+    <color name="accent">#4DE8D0</color>
+    <color name="accent_dim">#2E8C7F</color>
+
+    <color name="text_primary">#EAF2F1</color>
+    <color name="text_secondary">#8FA6A3</color>
+    <color name="text_disabled">#54635F</color>
+
+    <color name="divider">#243033</color>
+    <color name="error">#E8615A</color>
+    <color name="success">#4DE8A0</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>

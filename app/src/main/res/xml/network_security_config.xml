@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Base URL server bisa berupa:
+        - http://127.0.0.1:4200 atau http://192.168.x.x:4200 (jaringan lokal, saat testing)
+        - https://xxxx.trycloudflare.com atau domain cloudflared lainnya (tunnel publik)
+        Config ini mengizinkan cleartext (http) untuk semua domain karena base URL
+        diatur dinamis oleh pengguna di Settings dan tidak diketahui saat build.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
