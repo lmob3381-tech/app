@@ -1,0 +1,289 @@
+name: Decompile APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_path:
+        description: "Path APK di dalam repo"
+        required: false
+        default: "apk/app.apk"
+  push:
+    paths:
+      - "apk/**.apk"
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set APK path
+        id: vars
+        run: |
+          APK_PATH="${{ github.event.inputs.apk_path }}"
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find apk -name "*.apk" | head -n 1)
+          fi
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "::error::APK tidak ditemukan di folder apk/"
+            exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download JADX
+        run: |
+          curl -L -o jadx.zip https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+
+      - name: Decompile APK to Java source
+        run: |
+          mkdir -p output/java-source
+          ./jadx/bin/jadx --output-dir output/java-source --show-bad-code --no-res "${{ steps.vars.outputs.apk_path }}" || true
+
+      - name: Download apktool
+        run: |
+          mkdir -p apktool-bin
+          curl -L -o apktool-bin/apktool.jar https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar
+
+      - name: Decode resources with apktool
+        run: |
+          mkdir -p output/apktool-decode
+          java -jar apktool-bin/apktool.jar decode "${{ steps.vars.outputs.apk_path }}" -o output/apktool-decode -f || true
+
+      - name: Auto-detect package name
+        id: pkg
+        run: |
+          MANIFEST="output/apktool-decode/AndroidManifest.xml"
+          PKG=$(grep -o 'package="[^"]*"' "$MANIFEST" | head -n 1 | sed 's/package="//;s/"//')
+          if [ -z "$PKG" ]; then
+            echo "::warning::Package name tidak terdeteksi, skip filter."
+            echo "pkg=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Package terdeteksi: $PKG"
+            echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Filter source jadi hanya kode milik sendiri
+        if: steps.pkg.outputs.pkg != ''
+        run: |
+          PKG="${{ steps.pkg.outputs.pkg }}"
+          PKG_PATH=$(echo "$PKG" | tr '.' '/')
+          mkdir -p output/source-only
+
+          # cari root sources hasil JADX (biasanya output/java-source/sources)
+          SRC_ROOT="output/java-source/sources"
+          if [ ! -d "$SRC_ROOT" ]; then
+            SRC_ROOT="output/java-source"
+          fi
+
+          FOUND=0
+          for base in "$SRC_ROOT/$PKG_PATH" "$SRC_ROOT/kotlin/$PKG_PATH"; do
+            if [ -d "$base" ]; then
+              DEST="output/source-only/$(echo "$PKG_PATH")"
+              mkdir -p "$(dirname "$DEST")"
+              cp -r "$base" "$DEST"
+              FOUND=1
+              echo "Copied: $base -> $DEST"
+            fi
+          done
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "::warning::Folder source untuk package $PKG tidak ditemukan persis. Menyalin seluruh source sebagai fallback."
+            cp -r "$SRC_ROOT" output/source-only-full
+          fi
+
+          echo "PKG_PATH=$PKG_PATH" > output/source-only/_package_info.txt
+          echo "Package: $PKG" >> output/source-only/_package_info.txt
+
+      - name: Generate Android Studio project skeleton
+        if: steps.pkg.outputs.pkg != ''
+        run: |
+          PKG="${{ steps.pkg.outputs.pkg }}"
+          PKG_PATH=$(echo "$PKG" | tr '.' '/')
+          PROJ="output/android-studio-project"
+
+          mkdir -p "$PROJ/app/src/main/java/$PKG_PATH"
+          mkdir -p "$PROJ/app/src/main/res"
+          mkdir -p "$PROJ/gradle/wrapper"
+
+          SRC_ROOT="output/java-source/sources"
+          if [ ! -d "$SRC_ROOT" ]; then
+            SRC_ROOT="output/java-source"
+          fi
+          for base in "$SRC_ROOT/$PKG_PATH" "$SRC_ROOT/kotlin/$PKG_PATH"; do
+            if [ -d "$base" ]; then
+              cp -r "$base"/* "$PROJ/app/src/main/java/$PKG_PATH/" 2>/dev/null || true
+            fi
+          done
+
+          if [ -d "output/apktool-decode/res" ]; then
+            cp -r output/apktool-decode/res/* "$PROJ/app/src/main/res/" 2>/dev/null || true
+          fi
+
+          if [ -f "output/apktool-decode/AndroidManifest.xml" ]; then
+            cp output/apktool-decode/AndroidManifest.xml "$PROJ/app/src/main/AndroidManifest.xml"
+          fi
+
+          MIN_SDK=21
+          TARGET_SDK=34
+          if [ -f "output/apktool-decode/apktool.yml" ]; then
+            DETECTED_MIN=$(grep "minSdkVersion" output/apktool-decode/apktool.yml | sed "s/.*minSdkVersion: //" | tr -d "'\"")
+            DETECTED_TARGET=$(grep "targetSdkVersion" output/apktool-decode/apktool.yml | sed "s/.*targetSdkVersion: //" | tr -d "'\"")
+            [ -n "$DETECTED_MIN" ] && MIN_SDK=$DETECTED_MIN
+            [ -n "$DETECTED_TARGET" ] && TARGET_SDK=$DETECTED_TARGET
+          fi
+
+          cat > "$PROJ/app/build.gradle.kts" << EOF
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "$PKG"
+              compileSdk = $TARGET_SDK
+
+              defaultConfig {
+                  applicationId = "$PKG"
+                  minSdk = $MIN_SDK
+                  targetSdk = $TARGET_SDK
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_1_8
+                  targetCompatibility = JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+          }
+
+          dependencies {
+              // PENTING: dependency asli TIDAK bisa dideteksi otomatis dari APK.
+              // Tambahkan manual sesuai import yang error saat build, contoh umum:
+              // implementation("androidx.core:core-ktx:1.12.0")
+              // implementation("androidx.appcompat:appcompat:1.6.1")
+              // implementation("com.google.android.material:material:1.11.0")
+          }
+          EOF
+
+          cat > "$PROJ/build.gradle.kts" << 'ROOTEOF'
+          plugins {
+              id("com.android.application") version "8.2.0" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.20" apply false
+          }
+          ROOTEOF
+
+          cat > "$PROJ/settings.gradle.kts" << EOF
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "$PKG"
+          include(":app")
+          EOF
+
+          cat > "$PROJ/gradle.properties" << 'PROPEOF'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          kotlin.code.style=official
+          PROPEOF
+
+          cat > "$PROJ/README_PENTING.md" << EOF
+          # Skeleton Project - Hasil Auto-Generate
+
+          Project ini di-generate otomatis dari hasil decompile APK.
+          Package terdeteksi: $PKG
+
+          ## WAJIB dilakukan manual sebelum bisa build:
+
+          1. Dependency di app/build.gradle.kts masih KOSONG.
+             Semua nama library (androidx, material, retrofit, dll) hilang saat APK
+             dikompilasi dan TIDAK BISA dideteksi otomatis. Buka project di Android Studio,
+             coba build, lalu tambahkan dependency satu-satu berdasarkan error "cannot resolve symbol".
+
+          2. Source code hasil decompile kemungkinan ada error syntax.
+             Cari komentar seperti "JADX ERROR" atau kode yang di-highlight merah,
+             perbaiki manual satu per satu.
+
+          3. Resource ID kadang tidak nyambung sempurna antara kode dan folder res/.
+             Kalau ada error "unresolved reference: R.id.xxx", cek apakah id itu ada di res/layout/.
+
+          4. File gradle/wrapper/gradle-wrapper.properties belum di-generate di sini.
+             Buka project ini di Android Studio dan biarkan Android Studio generate ulang
+             Gradle wrapper otomatis (File > Sync Project with Gradle Files).
+          EOF
+
+          echo "Skeleton project selesai dibuat di $PROJ"
+
+      - name: Zip skeleton project
+        if: steps.pkg.outputs.pkg != ''
+        run: |
+          if [ -d output/android-studio-project ]; then
+            cd output/android-studio-project
+            zip -r ../../android-studio-project.zip .
+          fi
+
+      - name: Upload artifact - Android Studio skeleton
+        if: steps.pkg.outputs.pkg != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-studio-project
+          path: android-studio-project.zip
+          retention-days: 14
+
+      - name: Zip hasil lengkap
+        run: |
+          cd output
+          zip -r ../decompiled-result.zip .
+
+      - name: Zip hasil ringkas (source milik sendiri)
+        if: steps.pkg.outputs.pkg != ''
+        run: |
+          if [ -d output/source-only ]; then
+            cd output/source-only
+            zip -r ../../source-only.zip .
+          elif [ -d output/source-only-full ]; then
+            cd output/source-only-full
+            zip -r ../../source-only.zip .
+          fi
+
+      - name: Upload artifact - hasil lengkap
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-source
+          path: decompiled-result.zip
+          retention-days: 14
+
+      - name: Upload artifact - source ringkas
+        if: steps.pkg.outputs.pkg != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-only
+          path: source-only.zip
+          retention-days: 14
