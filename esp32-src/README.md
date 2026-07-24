@@ -1,30 +1,26 @@
 # ESP32 Captive Splash Portal
 
-WiFi Access Point ESP32 dengan halaman splash (bukan login kredensial —
-cuma tombol "Lanjut") yang memutar audio di HP user, lalu memberi akses
-internet asli lewat NAT dari WiFi source lain.
+WiFi Access Point ESP32 dengan halaman splash: device connect → popup
+otomatis muncul → user klik tombol "Lanjut" → audio MP3 bunyi di HP user.
 
 ## Cara Kerja Singkat
 
 ```
-[Internet] --- [WiFi Source/Rumah] --- (STA) [ESP32] (AP) --- [HP User]
-                                          |
-                                     NAT/IP forward
+[HP User] --- connect WiFi --- [ESP32 sebagai Access Point]
+                                        |
+                          popup splash page otomatis muncul
+                                        |
+                         user klik tombol "Lanjut" -> MP3 bunyi
 ```
 
-1. ESP32 connect sebagai **STA** ke WiFi rumah/kantor Anda (sumber internet).
-2. ESP32 juga jadi **AP** sendiri untuk device lain connect.
-3. Saat HP connect ke AP ESP32, otomatis muncul popup captive portal
-   (splash page) berisi audio player + tombol "Lanjut".
-4. Setelah "Lanjut" ditekan, HP diarahkan keluar dari captive portal
-   dan browsing normal — trafiknya di-NAT oleh ESP32 ke WiFi source.
+Ini **bukan sistem login** (tidak ada cek username/password), murni
+splash/landing page dengan tombol.
 
 ## Setup
 
 ### 1. Edit konfigurasi
 Buka `include/config.h`, isi:
 - `AP_SSID` / `AP_PASSWORD` → nama WiFi yang dipancarkan ESP32
-- `STA_SSID` / `STA_PASSWORD` → WiFi source Anda yang punya internet
 
 ### 2. Siapkan file audio
 Taruh file MP3 di `data/welcome.mp3` (nama harus sama dengan
@@ -40,7 +36,7 @@ dan menghasilkan artifact `esp32-firmware` berisi:
 
 Download artifact itu dari tab **Actions** di GitHub setelah build selesai.
 
-### 4. Flash ke ESP32 (dari laptop, GitHub Actions TIDAK bisa akses device fisik Anda)
+### 4. Flash ke ESP32 (dari laptop — GitHub Actions TIDAK bisa akses device fisik Anda)
 
 Install esptool:
 ```bash
@@ -66,17 +62,46 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash \
 > Ganti `/dev/ttyUSB0` sesuai port serial ESP32 Anda
 > (Windows: `COM3` dst, Mac: `/dev/cu.usbserial-XXXX`).
 
+## Kenapa Tidak Ada Fitur "Bagikan Internet dari WiFi Lain" (NAT)?
+
+Awalnya proyek ini mencoba fitur NAT (supaya device yang connect ke
+ESP32 bisa internetan lewat WiFi rumah/kantor yang di-relay ESP32).
+Ternyata ini **gagal di-compile** dengan error:
+
+```
+undefined reference to `ip_napt_enable'
+```
+
+Setelah ditelusuri, penyebabnya adalah keterbatasan fundamental:
+Arduino framework untuk ESP32 di PlatformIO menggunakan library **lwip
+versi precompiled** dari Espressif, dan fungsi NAT (`ip_napt_enable`)
+memang ada di header tapi implementasinya **tidak ikut ter-compile** ke
+dalam library precompiled itu. Flag `-D...` di `build_flags` tidak bisa
+memperbaiki ini karena masalahnya ada di binary library, bukan di kode
+kita.
+
+Fitur NAT semacam ini **hanya bisa jalan dengan framework ESP-IDF asli**
+(bukan Arduino), seperti yang dipakai proyek referensi
+[esp32_nat_router](https://github.com/martin-ger/esp32_nat_router).
+Itu butuh setup & alur kerja yang jauh lebih rumit (menconfig ESP-IDF,
+dll) dan di luar cakupan proyek splash-portal sederhana ini.
+
+**Kalau suatu saat butuh fitur internet-sharing beneran**, opsinya:
+1. Rewrite total pakai ESP-IDF framework, atau
+2. Pakai firmware `esp32_nat_router` yang sudah jadi & dimodifikasi untuk
+   menambahkan splash page ini di dalamnya, atau
+3. Gunakan router fisik terpisah untuk urusan internet-sharing, dan biarkan
+   ESP32 ini hanya menangani splash page saja.
+
 ## Catatan Teknis
 
-- **NAT/IP forwarding** memakai `lwip_napt.h` bawaan Arduino-ESP32 core.
-  Ini di-pin lewat `platform = espressif32@6.5.0` di `platformio.ini`
-  agar API-nya tersedia. Kalau upgrade versi platform, cek dulu apakah
-  `lwip/lwip_napt.h` masih ada.
 - Splash page **bukan sistem login sungguhan** — tidak ada database user,
-  cuma landing page + tombol lanjut, sesuai kebutuhan.
-- Deteksi captive portal sudah mencakup endpoint umum Android, iOS/macOS,
+  cuma landing page + tombol.
+- Audio diputar di **browser HP user** (bukan speaker fisik ESP32) via
+  tag `<audio>`, dipicu oleh klik tombol (bukan `autoplay`) karena
+  kebanyakan browser mobile memblokir autoplay tanpa interaksi user.
+- Deteksi captive portal mencakup endpoint umum Android, iOS/macOS,
   Windows, dan Firefox.
-- Jika WiFi source terputus, ESP32 otomatis mencoba reconnect di `loop()`.
 
 ## Lisensi
 Bebas dipakai/dimodifikasi untuk keperluan pribadi Anda.

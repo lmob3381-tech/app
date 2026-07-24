@@ -1,27 +1,28 @@
 /*
- * ESP32 Captive Portal (Splash Page) + Audio (played on client's phone) + Internet Bridging (NAT)
+ * ESP32 Captive Splash Portal
  *
  * Alur:
- *  1. ESP32 connect ke WiFi "source" (STA) yang punya internet asli.
- *  2. ESP32 juga jadi Access Point (AP) sendiri untuk device lain.
- *  3. Saat device connect ke AP, OS device (Android/iOS) otomatis mendeteksi
+ *  1. ESP32 jadi Access Point (AP) sendiri, device lain bisa connect.
+ *  2. Saat device connect, OS-nya (Android/iOS/Windows) otomatis mendeteksi
  *     captive portal lewat DNS hijack + HTTP probe, lalu membuka splash page.
- *  4. Splash page berisi audio player (file MP3 disajikan dari LittleFS) + tombol "Lanjut".
- *  5. Setelah user klik "Lanjut", MAC address device tsb di-whitelist dan
- *     NAT (IPv4 NAPT) sudah aktif dari awal sehingga device langsung dapat internet.
+ *  3. Splash page berisi audio player (file MP3 dari LittleFS, autoplay di HP
+ *     user) + tombol "Lanjut".
+ *  4. Setelah tombol diklik, portal ditutup dan device browsing seperti biasa
+ *     (mengikuti pengaturan WiFi normal ESP32).
  *
- * PENTING:
- *  - Upload file audio ke LittleFS lewat `pio run -t uploadfs` (lokal) atau
- *    biarkan CI hanya build firmware (data folder di-flash terpisah, lihat README).
- *  - NAT butuh arduino-esp32 core yang menyediakan lwip_napt.h (sudah di-pin di platformio.ini).
+ * CATATAN:
+ *  - Versi ini TIDAK melakukan NAT/internet-sharing dari WiFi lain (fitur itu
+ *    dibuang karena ip_napt_enable() tidak tersedia di precompiled Arduino
+ *    framework untuk ESP32 - lihat README.md untuk detail & alternatif).
+ *  - Kalau device yang connect ke AP ESP32 butuh akses internet asli, itu
+ *    perlu disiapkan terpisah (mis. lewat router fisik atau proyek berbasis
+ *    ESP-IDF murni).
  */
 
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <LittleFS.h>
 #include <ESPAsyncWebServer.h>
-#include "lwip/lwip_napt.h"
-#include "lwip/inet.h"
 #include "config.h"
 
 // ---------- Globals ----------
@@ -31,37 +32,6 @@ AsyncWebServer server(80);
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
 IPAddress apSubnet(255, 255, 255, 0);
-
-bool staConnected = false;
-
-// Sederhana: simpan MAC device yang sudah klik "lanjut" supaya tidak
-// dipaksa ke splash page lagi selama masih connect (opsional, karena
-// NAT sudah aktif untuk semua device di AP secara default di skrip ini).
-#define MAX_ALLOWED 32
-String allowedMacs[MAX_ALLOWED];
-int allowedCount = 0;
-
-bool isAllowed(const String &mac) {
-  for (int i = 0; i < allowedCount; i++) {
-    if (allowedMacs[i] == mac) return true;
-  }
-  return false;
-}
-
-void addAllowed(const String &mac) {
-  if (isAllowed(mac)) return;
-  if (allowedCount < MAX_ALLOWED) {
-    allowedMacs[allowedCount++] = mac;
-  }
-}
-
-// Ambil MAC address client dari IP (lookup ARP table ESP32)
-String getClientMac(AsyncWebServerRequest *request) {
-  IPAddress clientIP = request->client()->remoteIP();
-  // ESP32 Arduino core tidak expose ARP table langsung dengan mudah;
-  // sebagai fallback kita pakai IP sebagai identifier sesi.
-  return clientIP.toString();
-}
 
 // ---------- HTML Splash Page ----------
 String buildSplashPage() {
@@ -116,27 +86,38 @@ String buildSplashPage() {
   <div class="card">
     <h1>__TITLE__</h1>
     <p class="subtitle">__SUBTITLE__</p>
-    <audio controls autoplay>
+    <audio id="player" controls>
       <source src="__AUDIO_FILE__" type="audio/mpeg">
       Browser Anda tidak mendukung pemutar audio.
     </audio>
-    <button id="btnContinue" onclick="goContinue()">Lanjut ke Internet</button>
-    <p class="hint">Dengan menekan tombol, Anda menyetujui akses WiFi ini.</p>
+    <button id="btnContinue" onclick="goContinue()">Lanjut</button>
+    <p class="hint">Tekan tombol untuk memutar audio dan melanjutkan.</p>
   </div>
 
 <script>
 function goContinue() {
   var btn = document.getElementById('btnContinue');
+  var player = document.getElementById('player');
+
+  // Beberapa browser mobile hanya izinkan audio play() setelah ada
+  // interaksi user (klik) -- makanya play() dipanggil di sini, bukan autoplay.
+  player.play().catch(function(e) {
+    console.log('Audio play error:', e);
+  });
+
   btn.disabled = true;
-  btn.innerText = 'Menghubungkan...';
+  btn.innerText = 'Memutar audio...';
+
   fetch('/continue', { method: 'POST' })
     .then(function() {
-      // Arahkan ke halaman netral agar OS menutup captive portal window
-      window.location.href = 'http://connectivitycheck.gstatic.com/generate_204';
+      btn.innerText = 'Selesai';
+      setTimeout(function() {
+        window.location.href = 'http://connectivitycheck.gstatic.com/generate_204';
+      }, 1500);
     })
     .catch(function() {
       btn.disabled = false;
-      btn.innerText = 'Lanjut ke Internet';
+      btn.innerText = 'Lanjut';
     });
 }
 </script>
@@ -150,37 +131,11 @@ function goContinue() {
   return html;
 }
 
-// ---------- Setup NAT / IP forwarding ----------
-void setupNAT() {
-  // Aktifkan IP forwarding dan NAPT pada interface AP -> STA
-  ip_napt_enable(WiFi.localIP(), 1);
-  Serial.println("[NAT] NAPT diaktifkan, AP -> STA forwarding siap.");
-}
-
-// ---------- WiFi Setup ----------
-void connectSTA() {
-  Serial.printf("[STA] Menghubungkan ke WiFi source: %s\n", STA_SSID);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.begin(STA_SSID, STA_PASSWORD);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(300);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    staConnected = true;
-    Serial.printf("[STA] Terhubung! IP: %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    staConnected = false;
-    Serial.println("[STA] GAGAL terhubung ke WiFi source. Cek SSID/password di config.h");
-  }
-}
-
+// ---------- WiFi AP Setup ----------
 void setupAP() {
+  WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apIP, apSubnet);
+
   bool ok;
   if (strlen(AP_PASSWORD) == 0) {
     ok = WiFi.softAP(AP_SSID, NULL, AP_CHANNEL, false, AP_MAX_CONN);
@@ -193,7 +148,6 @@ void setupAP() {
 }
 
 // ---------- Captive Portal Detection Handlers ----------
-// Berbagai OS punya endpoint probe berbeda untuk mendeteksi captive portal.
 void registerCaptiveProbes() {
   auto redirectToSplash = [](AsyncWebServerRequest *request) {
     request->redirect("http://192.168.4.1/");
@@ -221,16 +175,12 @@ void setup() {
     Serial.println("[FS] Gagal mount LittleFS!");
   } else {
     Serial.println("[FS] LittleFS siap.");
+    if (!LittleFS.exists(AUDIO_FILENAME)) {
+      Serial.printf("[FS] PERINGATAN: file %s tidak ditemukan! Upload dulu ke LittleFS.\n", AUDIO_FILENAME);
+    }
   }
 
-  connectSTA();
   setupAP();
-
-  if (staConnected) {
-    setupNAT();
-  } else {
-    Serial.println("[NAT] Dilewati karena STA tidak terhubung. Device akan connect ke AP tapi TANPA internet.");
-  }
 
   // DNS: semua domain diarahkan ke IP ESP32 supaya captive portal terdeteksi
   dnsServer.start(DNS_PORT, "*", apIP);
@@ -251,9 +201,7 @@ void setup() {
 
   // Endpoint saat tombol "Lanjut" ditekan
   server.on("/continue", HTTP_POST, [](AsyncWebServerRequest *request) {
-    String id = getClientMac(request);
-    addAllowed(id);
-    Serial.printf("[PORTAL] Device %s menekan lanjut. Internet aktif (NAT global sudah jalan).\n", id.c_str());
+    Serial.println("[PORTAL] Tombol lanjut ditekan.");
     request->send(200, "text/plain", "OK");
   });
 
@@ -270,19 +218,4 @@ void setup() {
 
 void loop() {
   dnsServer.processNextRequest();
-
-  // Coba reconnect STA kalau putus, supaya NAT tidak mati total
-  static unsigned long lastCheck = 0;
-  if (millis() - lastCheck > 10000) {
-    lastCheck = millis();
-    if (WiFi.status() != WL_CONNECTED && staConnected) {
-      Serial.println("[STA] Koneksi ke source terputus, mencoba reconnect...");
-      staConnected = false;
-      WiFi.reconnect();
-    } else if (WiFi.status() == WL_CONNECTED && !staConnected) {
-      staConnected = true;
-      Serial.println("[STA] Reconnect berhasil, mengaktifkan ulang NAT...");
-      setupNAT();
-    }
-  }
 }
