@@ -1,107 +1,62 @@
-# ESP32 Captive Splash Portal
+# Build pydantic-core untuk Termux (armv7 / 32-bit Android)
 
-WiFi Access Point ESP32 dengan halaman splash: device connect → popup
-otomatis muncul → user klik tombol "Lanjut" → audio MP3 bunyi di HP user.
+Repo ini pakai GitHub Actions buat cross-compile `pydantic-core` (yang butuh Rust)
+supaya HP Termux 32-bit tidak perlu compile sendiri di HP.
 
-## Cara Kerja Singkat
+## Cara pakai
 
-```
-[HP User] --- connect WiFi --- [ESP32 sebagai Access Point]
-                                        |
-                          popup splash page otomatis muncul
-                                        |
-                         user klik tombol "Lanjut" -> MP3 bunyi
-```
+1. Push folder ini ke repo GitHub baru (public atau private, bebas).
+2. Buka tab **Actions** di repo tersebut.
+3. Pilih workflow **"Build pydantic-core for Termux (armv7 Android)"**.
+4. Klik **"Run workflow"**.
+   - `pydantic_core_version`: kosongkan kalau mau versi terbaru dari branch `main`,
+     atau isi contoh `2.23.4` kalau mau versi spesifik (harus ada tag `v2.23.4` di
+     repo asli pydantic-core).
+   - `python_version`: WAJIB SAMA dengan versi Python di Termux kamu.
+     Cek dulu di Termux dengan:
+     ```
+     python --version
+     ```
+     Kalau keluar `Python 3.12.x`, isi `3.12`. Kalau `3.11.x`, isi `3.11`, dst.
+5. Tunggu build selesai (~10-20 menit, kadang lebih cepat karena di server GitHub).
+6. Setelah selesai (centang hijau), scroll ke bawah ke bagian **Artifacts**,
+   download `pydantic-core-armv7-termux.zip`.
 
-Ini **bukan sistem login** (tidak ada cek username/password), murni
-splash/landing page dengan tombol.
+## Cara pakai hasil build-nya di Termux
 
-## Setup
+1. Pindahkan file zip ke HP (lewat Google Drive, Telegram, dsb), lalu di Termux:
+   ```bash
+   termux-setup-storage   # kalau belum pernah
+   cd ~
+   cp /sdcard/Download/pydantic-core-armv7-termux.zip .
+   unzip pydantic-core-armv7-termux.zip
+   ```
+2. Install file `.whl` yang dihasilkan:
+   ```bash
+   pip install pydantic_core-*.whl
+   ```
+3. Kalau sukses, lanjut install sisanya seperti biasa:
+   ```bash
+   pip install pydantic google-genai requests beautifulsoup4
+   ```
 
-### 1. Edit konfigurasi
-Buka `include/config.h`, isi:
-- `AP_SSID` / `AP_PASSWORD` → nama WiFi yang dipancarkan ESP32
+## Kalau build gagal
 
-### 2. Siapkan file audio
-Taruh file MP3 di `data/welcome.mp3` (nama harus sama dengan
-`AUDIO_FILENAME` di config.h).
+- Cek log di tab Actions, biasanya errornya soal:
+  - **Versi Python mismatch**: pastikan `python_version` di workflow sama persis
+    dengan `python --version` di Termux.
+  - **Tag versi tidak ada**: kalau isi `pydantic_core_version` tapi repo asli tidak
+    punya tag itu, checkout akan gagal. Cek daftar tag di
+    https://github.com/pydantic/pydantic-core/tags
+  - **NDK/linker error**: biasanya versi NDK di workflow (`r25b`) sudah cukup umum,
+    tapi kalau pydantic-core versi sangat baru butuh NDK lebih baru, ganti
+    `ndk-version` di file `.github/workflows/build.yml`.
 
-### 3. Build via GitHub Actions
-Push ke repo ini, workflow `.github/workflows/build.yml` otomatis jalan
-dan menghasilkan artifact `esp32-firmware` berisi:
-- `firmware.bin`
-- `littlefs.bin` (berisi splash page assets/audio)
-- `bootloader.bin`
-- `partitions.bin`
+## Catatan
 
-Download artifact itu dari tab **Actions** di GitHub setelah build selesai.
-
-### 4. Flash ke ESP32 (dari laptop — GitHub Actions TIDAK bisa akses device fisik Anda)
-
-Install esptool:
-```bash
-pip install esptool
-```
-
-Flash firmware + bootloader + partition table:
-```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash \
-  0x1000  bootloader.bin \
-  0x8000  partitions.bin \
-  0x10000 firmware.bin
-```
-
-Flash filesystem (LittleFS) — cek offset sesuai partition table Anda,
-biasanya di sekitar `0x290000` untuk partisi default 4MB, atau lihat
-output build untuk offset pastinya:
-```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash \
-  0x290000 littlefs.bin
-```
-
-> Ganti `/dev/ttyUSB0` sesuai port serial ESP32 Anda
-> (Windows: `COM3` dst, Mac: `/dev/cu.usbserial-XXXX`).
-
-## Kenapa Tidak Ada Fitur "Bagikan Internet dari WiFi Lain" (NAT)?
-
-Awalnya proyek ini mencoba fitur NAT (supaya device yang connect ke
-ESP32 bisa internetan lewat WiFi rumah/kantor yang di-relay ESP32).
-Ternyata ini **gagal di-compile** dengan error:
-
-```
-undefined reference to `ip_napt_enable'
-```
-
-Setelah ditelusuri, penyebabnya adalah keterbatasan fundamental:
-Arduino framework untuk ESP32 di PlatformIO menggunakan library **lwip
-versi precompiled** dari Espressif, dan fungsi NAT (`ip_napt_enable`)
-memang ada di header tapi implementasinya **tidak ikut ter-compile** ke
-dalam library precompiled itu. Flag `-D...` di `build_flags` tidak bisa
-memperbaiki ini karena masalahnya ada di binary library, bukan di kode
-kita.
-
-Fitur NAT semacam ini **hanya bisa jalan dengan framework ESP-IDF asli**
-(bukan Arduino), seperti yang dipakai proyek referensi
-[esp32_nat_router](https://github.com/martin-ger/esp32_nat_router).
-Itu butuh setup & alur kerja yang jauh lebih rumit (menconfig ESP-IDF,
-dll) dan di luar cakupan proyek splash-portal sederhana ini.
-
-**Kalau suatu saat butuh fitur internet-sharing beneran**, opsinya:
-1. Rewrite total pakai ESP-IDF framework, atau
-2. Pakai firmware `esp32_nat_router` yang sudah jadi & dimodifikasi untuk
-   menambahkan splash page ini di dalamnya, atau
-3. Gunakan router fisik terpisah untuk urusan internet-sharing, dan biarkan
-   ESP32 ini hanya menangani splash page saja.
-
-## Catatan Teknis
-
-- Splash page **bukan sistem login sungguhan** — tidak ada database user,
-  cuma landing page + tombol.
-- Audio diputar di **browser HP user** (bukan speaker fisik ESP32) via
-  tag `<audio>`, dipicu oleh klik tombol (bukan `autoplay`) karena
-  kebanyakan browser mobile memblokir autoplay tanpa interaksi user.
-- Deteksi captive portal mencakup endpoint umum Android, iOS/macOS,
-  Windows, dan Firefox.
-
-## Lisensi
-Bebas dipakai/dimodifikasi untuk keperluan pribadi Anda.
+- Wheel hasil build ini HANYA untuk arsitektur **armv7 (32-bit)**. Kalau ternyata
+  HP kamu sebenarnya 64-bit (`aarch64`), pakai repo siap pakai
+  https://github.com/Eutalix/android-pydantic-core yang sudah sedia dua-duanya,
+  jadi tidak perlu build sendiri kalau memang itu cocok.
+- Build ini jalan di server GitHub (bukan di HP), jadi tidak makan resource HP
+  sama sekali — hanya proses download hasil akhirnya saja yang ringan.
