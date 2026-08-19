@@ -1,0 +1,92 @@
+name: Source to APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "ID build dari APK Builder"
+        required: true
+      app_name:
+        description: "Nama aplikasi"
+        required: true
+      source_zip_path:
+        description: "Path file ZIP source di dalam repo (branch temporary)"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch (berisi source hasil upload)
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Ekstrak source project
+        run: |
+          mkdir -p ./android-build
+          unzip -q "${{ github.event.inputs.source_zip_path }}" -d ./android-build
+
+      - name: Sanity check - project Android valid
+        working-directory: ./android-build
+        run: |
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+            echo "::error::Tidak ditemukan settings.gradle / settings.gradle.kts di root source."
+            echo "Isi folder source:"
+            ls -la
+            exit 1
+          fi
+          echo "OK: settings.gradle ditemukan."
+
+      - name: Siapkan gradlew (pakai punya project, atau generate baru)
+        working-directory: ./android-build
+        run: |
+          if [ -f "./gradlew" ]; then
+            echo "gradlew sudah ada di source, memakainya."
+            chmod +x ./gradlew
+          else
+            echo "gradlew tidak ada di source, generate baru dengan Gradle 8.9 (kompatibel AGP 8.x)."
+            gradle wrapper --gradle-version 8.9 --no-daemon
+            chmod +x ./gradlew
+          fi
+
+      - name: Build APK debug
+        working-directory: ./android-build
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK dengan nama app
+        run: |
+          mkdir -p ./output
+          SAFE_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr -cd '[:alnum:]_-')
+          APK_FILE=$(find ./android-build -path "*/outputs/apk/debug/*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "APK hasil build tidak ditemukan."
+            exit 1
+          fi
+          cp "$APK_FILE" "./output/${SAFE_NAME}.apk"
+
+      - name: Upload artifact APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-result-${{ github.event.inputs.build_id }}
+          path: ./output/*.apk
+          retention-days: 7
+
+      - name: Bersihkan file source dari repo
+        if: always()
+        run: |
+          git config user.name "apk-builder-bot"
+          git config user.email "apk-builder-bot@users.noreply.github.com"
+          git rm -f "${{ github.event.inputs.source_zip_path }}" || true
+          git commit -m "chore: bersihkan source setelah build ${{ github.event.inputs.build_id }}" || true
+          git push origin HEAD:"${{ github.ref_name }}" || true
