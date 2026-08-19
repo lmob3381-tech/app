@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace '{{PACKAGE_NAME}}'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "{{PACKAGE_NAME}}"
         minSdk 21
-        targetSdk 34
+        targetSdk 35
         versionCode {{VERSION_CODE}}
         versionName "{{VERSION_NAME}}"
     }
@@ -27,6 +27,6 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'androidx.webkit:webkit:1.9.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.12.1'
 }

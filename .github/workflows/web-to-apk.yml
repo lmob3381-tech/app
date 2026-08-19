@@ -35,6 +35,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Sanity check - template exists
+        run: |
+          echo "Isi repo di root:"
+          ls -la
+
+          if [ ! -f "templates/android-webview/generate_project.py" ]; then
+            echo "::error::File templates/android-webview/generate_project.py TIDAK ditemukan di branch ini."
+            echo "::error::Pastikan folder templates/ sudah di-commit dan di-push ke branch main."
+            echo "Isi folder templates/ (jika ada):"
+            find templates -maxdepth 3 2>/dev/null || echo "  (folder templates/ tidak ada sama sekali)"
+            exit 1
+          fi
+
+          echo "OK: template generator ditemukan."
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -59,9 +74,13 @@ jobs:
             --fullscreen "${{ github.event.inputs.fullscreen }}" \
             --output-dir ./android-build
 
+      - name: Generate Gradle wrapper jar
+        working-directory: ./android-build
+        run: gradle wrapper --gradle-version 8.9 --no-daemon
+
       - name: Build APK debug
         working-directory: ./android-build
-        run: gradle assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Rename APK dengan nama app
         run: |
