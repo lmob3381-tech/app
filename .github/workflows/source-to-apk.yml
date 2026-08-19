@@ -1,5 +1,8 @@
 name: Source to APK
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -37,32 +40,20 @@ jobs:
           mkdir -p ./android-build
           unzip -q "${{ github.event.inputs.source_zip_path }}" -d ./android-build
 
-      - name: Sanity check - project Android valid
-        working-directory: ./android-build
+      - name: Cari gradlew, beri izin eksekusi jika ada
         run: |
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "::error::Tidak ditemukan settings.gradle / settings.gradle.kts di root source."
-            echo "Isi folder source:"
-            ls -la
-            exit 1
-          fi
-          echo "OK: settings.gradle ditemukan."
-
-      - name: Siapkan gradlew (pakai punya project, atau generate baru)
-        working-directory: ./android-build
-        run: |
-          if [ -f "./gradlew" ]; then
-            echo "gradlew sudah ada di source, memakainya."
-            chmod +x ./gradlew
-          else
-            echo "gradlew tidak ada di source, generate baru dengan Gradle 8.9 (kompatibel AGP 8.x)."
-            gradle wrapper --gradle-version 8.9 --no-daemon
-            chmod +x ./gradlew
+          if [ -f ./android-build/gradlew ]; then
+            chmod +x ./android-build/gradlew
           fi
 
       - name: Build APK debug
         working-directory: ./android-build
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          if [ -f ./gradlew ]; then
+            ./gradlew assembleDebug --no-daemon
+          else
+            gradle assembleDebug --no-daemon
+          fi
 
       - name: Rename APK dengan nama app
         run: |
@@ -75,12 +66,30 @@ jobs:
           fi
           cp "$APK_FILE" "./output/${SAFE_NAME}.apk"
 
-      - name: Upload artifact APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-result-${{ github.event.inputs.build_id }}
-          path: ./output/*.apk
-          retention-days: 7
+      - name: Buat GitHub Release berisi APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-${{ github.event.inputs.build_id }}"
+          gh release create "$TAG" ./output/*.apk \
+            --title "APK Build ${{ github.event.inputs.build_id }}" \
+            --notes "Auto-generated APK build. App: ${{ github.event.inputs.app_name }}"
+
+      - name: Hapus release lama (sisakan maksimal 7 terbaru)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASES=$(gh release list --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[].tagName')
+
+          COUNT=0
+          for TAG in $RELEASES; do
+            COUNT=$((COUNT + 1))
+            if [ "$COUNT" -gt 7 ]; then
+              echo "Menghapus release lama: $TAG"
+              gh release delete "$TAG" --yes --cleanup-tag || true
+            fi
+          done
 
       - name: Bersihkan file source dari repo
         if: always()
@@ -90,3 +99,4 @@ jobs:
           git rm -f "${{ github.event.inputs.source_zip_path }}" || true
           git commit -m "chore: bersihkan source setelah build ${{ github.event.inputs.build_id }}" || true
           git push origin HEAD:"${{ github.ref_name }}" || true
+          
