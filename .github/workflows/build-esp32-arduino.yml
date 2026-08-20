@@ -1,0 +1,115 @@
+name: Build ESP32 Firmware (Arduino)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Unique job id from web backend"
+        required: true
+      project_zip_url:
+        description: "URL to download project zip (contains .ino + optional libraries/ folder)"
+        required: true
+      fqbn:
+        description: "Fully Qualified Board Name, e.g. esp32:esp32:esp32"
+        required: false
+        default: "esp32:esp32:esp32"
+      extra_libs:
+        description: "Comma separated list of extra Arduino Library Manager libs to install"
+        required: false
+        default: ""
+      callback_url:
+        description: "Backend URL to POST result status/artifact info to"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for scripts, optional)
+        uses: actions/checkout@v4
+
+      - name: Report start
+        if: ${{ github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"started\",\"run_id\":\"${{ github.run_id }}\"}" || true
+
+      - name: Download project zip
+        run: |
+          mkdir -p work/project
+          curl -sL "${{ github.event.inputs.project_zip_url }}" -o work/project.zip
+          cd work && unzip -o project.zip -d project
+          ls -la project
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$PWD/bin" >> $GITHUB_PATH
+
+      - name: Configure arduino-cli for ESP32
+        run: |
+          ./bin/arduino-cli config init
+          ./bin/arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          ./bin/arduino-cli core update-index
+          ./bin/arduino-cli core install esp32:esp32
+
+      - name: Install requested libraries
+        if: ${{ github.event.inputs.extra_libs != '' }}
+        run: |
+          IFS=',' read -ra LIBS <<< "${{ github.event.inputs.extra_libs }}"
+          for lib in "${LIBS[@]}"; do
+            ./bin/arduino-cli lib install "$lib" || echo "Failed to install $lib, continuing"
+          done
+
+      - name: Install bundled libraries (from project/libraries)
+        run: |
+          if [ -d "work/project/libraries" ]; then
+            mkdir -p ~/Arduino/libraries
+            cp -r work/project/libraries/* ~/Arduino/libraries/ || true
+          fi
+
+      - name: Locate sketch folder
+        id: sketch
+        run: |
+          SKETCH_DIR=$(find work/project -name "*.ino" -exec dirname {} \; | head -n1)
+          echo "dir=$SKETCH_DIR" >> $GITHUB_OUTPUT
+          echo "Found sketch dir: $SKETCH_DIR"
+
+      - name: Compile firmware
+        run: |
+          mkdir -p build-output
+          ./bin/arduino-cli compile \
+            --fqbn "${{ github.event.inputs.fqbn }}" \
+            --output-dir build-output \
+            "${{ steps.sketch.outputs.dir }}"
+
+      - name: Rename artifacts with job id
+        run: |
+          cd build-output
+          for f in *.bin; do
+            mv "$f" "${{ github.event.inputs.job_id }}_$f" || true
+          done
+          ls -la
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.event.inputs.job_id }}
+          path: build-output/**
+          retention-days: 7
+
+      - name: Report success
+        if: ${{ success() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"success\",\"run_id\":\"${{ github.run_id }}\",\"artifact_name\":\"firmware-${{ github.event.inputs.job_id }}\"}" || true
+
+      - name: Report failure
+        if: ${{ failure() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"failed\",\"run_id\":\"${{ github.run_id }}\"}" || true

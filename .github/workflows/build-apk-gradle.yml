@@ -1,0 +1,123 @@
+name: Build APK (Source - Gradle Project)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Unique job id from web backend"
+        required: true
+      project_zip_url:
+        description: "URL to download the Android Gradle project zip (must contain build.gradle / settings.gradle)"
+        required: true
+      build_variant:
+        description: "assembleDebug or assembleRelease"
+        required: false
+        default: "assembleDebug"
+      extra_permissions_csv:
+        description: "Comma separated Android permissions to ADD on top of the project's manifest, e.g. CAMERA,RECORD_AUDIO"
+        required: false
+        default: ""
+      remove_permissions_csv:
+        description: "Comma separated Android permissions to REMOVE from the project's manifest"
+        required: false
+        default: ""
+      callback_url:
+        description: "Backend URL to POST result status/artifact info to"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout worker repo (for helper scripts)
+        uses: actions/checkout@v4
+
+      - name: Report start
+        if: ${{ github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"started\",\"run_id\":\"${{ github.run_id }}\"}" || true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download project zip
+        run: |
+          mkdir -p work/project
+          curl -sL "${{ github.event.inputs.project_zip_url }}" -o work/project.zip
+          cd work && unzip -o project.zip -d project
+          ls -la project
+
+      - name: Locate Gradle project root
+        id: proj
+        run: |
+          ROOT=$(find work/project -maxdepth 3 -name "settings.gradle*" -exec dirname {} \; | head -n1)
+          if [ -z "$ROOT" ]; then
+            ROOT=$(find work/project -maxdepth 3 -name "build.gradle*" -exec dirname {} \; | head -n1)
+          fi
+          echo "root=$ROOT" >> $GITHUB_OUTPUT
+          echo "Project root: $ROOT"
+
+      - name: Patch AndroidManifest permissions (add/remove)
+        if: ${{ github.event.inputs.extra_permissions_csv != '' || github.event.inputs.remove_permissions_csv != '' }}
+        run: |
+          MANIFEST=$(find "${{ steps.proj.outputs.root }}" -path "*/src/main/AndroidManifest.xml" | head -n1)
+          echo "Patching $MANIFEST"
+          python3 scripts/patch_manifest_permissions.py \
+            --manifest "$MANIFEST" \
+            --add "${{ github.event.inputs.extra_permissions_csv }}" \
+            --remove "${{ github.event.inputs.remove_permissions_csv }}"
+
+      - name: Grant execute to gradlew
+        run: |
+          if [ -f "${{ steps.proj.outputs.root }}/gradlew" ]; then
+            chmod +x "${{ steps.proj.outputs.root }}/gradlew"
+          fi
+
+      - name: Build APK
+        working-directory: ${{ steps.proj.outputs.root }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew ${{ github.event.inputs.build_variant }} --no-daemon
+          else
+            gradle ${{ github.event.inputs.build_variant }} --no-daemon
+          fi
+
+      - name: Collect artifact
+        run: |
+          mkdir -p build-output
+          find "${{ steps.proj.outputs.root }}" -name "*.apk" -exec cp {} build-output/ \;
+          cd build-output
+          for f in *.apk; do
+            mv "$f" "${{ github.event.inputs.job_id }}_$f" || true
+          done
+          ls -la
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.job_id }}
+          path: build-output/**
+          retention-days: 7
+
+      - name: Report success
+        if: ${{ success() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"success\",\"run_id\":\"${{ github.run_id }}\",\"artifact_name\":\"apk-${{ github.event.inputs.job_id }}\"}" || true
+
+      - name: Report failure
+        if: ${{ failure() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"failed\",\"run_id\":\"${{ github.run_id }}\"}" || true

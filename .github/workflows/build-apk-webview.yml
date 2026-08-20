@@ -1,0 +1,140 @@
+name: Build APK (Web to APK - WebView)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Unique job id from web backend"
+        required: true
+      app_name:
+        description: "Application display name"
+        required: true
+      package_id:
+        description: "Android package id, e.g. com.example.myapp"
+        required: true
+      target_url:
+        description: "Website URL to wrap in WebView"
+        required: true
+      permissions_csv:
+        description: "Comma separated Android permissions, e.g. INTERNET,CAMERA,ACCESS_FINE_LOCATION"
+        required: false
+        default: "INTERNET"
+      icon_url:
+        description: "URL of app icon (PNG, square). Optional."
+        required: false
+        default: ""
+      version_name:
+        description: "App version name"
+        required: false
+        default: "1.0.0"
+      version_code:
+        description: "App version code (integer)"
+        required: false
+        default: "1"
+      allow_js:
+        description: "Enable JavaScript in WebView (true/false)"
+        required: false
+        default: "true"
+      callback_url:
+        description: "Backend URL to POST result status/artifact info to"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout worker repo (contains webview template)
+        uses: actions/checkout@v4
+
+      - name: Report start
+        if: ${{ github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"started\",\"run_id\":\"${{ github.run_id }}\"}" || true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Copy WebView template to workdir
+        run: |
+          mkdir -p work
+          cp -r templates/webview-android work/app-project
+          ls -la work/app-project
+
+      - name: Download icon (if provided)
+        if: ${{ github.event.inputs.icon_url != '' }}
+        run: |
+          curl -sL "${{ github.event.inputs.icon_url }}" -o icon_src.png || true
+          if [ -f icon_src.png ]; then
+            sudo apt-get update -y && sudo apt-get install -y imagemagick
+            for size_dir in mipmap-mdpi:48 mipmap-hdpi:72 mipmap-xhdpi:96 mipmap-xxhdpi:144 mipmap-xxxhdpi:192; do
+              dir="${size_dir%%:*}"; px="${size_dir##*:}"
+              mkdir -p "work/app-project/app/src/main/res/$dir"
+              convert icon_src.png -resize ${px}x${px} "work/app-project/app/src/main/res/$dir/ic_launcher.png"
+              convert icon_src.png -resize ${px}x${px} "work/app-project/app/src/main/res/$dir/ic_launcher_round.png"
+            done
+          fi
+
+      - name: Generate AndroidManifest.xml with custom permissions
+        run: |
+          python3 scripts/gen_manifest.py \
+            --package "${{ github.event.inputs.package_id }}" \
+            --permissions "${{ github.event.inputs.permissions_csv }}" \
+            --out "work/app-project/app/src/main/AndroidManifest.xml"
+
+      - name: Inject config (app name, url, JS toggle, version)
+        run: |
+          python3 scripts/gen_webview_config.py \
+            --project-dir "work/app-project" \
+            --app-name "${{ github.event.inputs.app_name }}" \
+            --package "${{ github.event.inputs.package_id }}" \
+            --url "${{ github.event.inputs.target_url }}" \
+            --allow-js "${{ github.event.inputs.allow_js }}" \
+            --version-name "${{ github.event.inputs.version_name }}" \
+            --version-code "${{ github.event.inputs.version_code }}"
+
+      - name: Generate Gradle wrapper (jar not stored in repo)
+        working-directory: work/app-project
+        run: |
+          gradle wrapper --gradle-version 8.7 || true
+          chmod +x gradlew
+
+      - name: Build debug APK
+        working-directory: work/app-project
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Collect artifact
+        run: |
+          mkdir -p build-output
+          find work/app-project -name "*.apk" -exec cp {} build-output/ \;
+          cd build-output
+          for f in *.apk; do
+            mv "$f" "${{ github.event.inputs.job_id }}_$f" || true
+          done
+          ls -la
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.job_id }}
+          path: build-output/**
+          retention-days: 7
+
+      - name: Report success
+        if: ${{ success() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"success\",\"run_id\":\"${{ github.run_id }}\",\"artifact_name\":\"apk-${{ github.event.inputs.job_id }}\"}" || true
+
+      - name: Report failure
+        if: ${{ failure() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"failed\",\"run_id\":\"${{ github.run_id }}\"}" || true

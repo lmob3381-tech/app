@@ -1,0 +1,93 @@
+name: Build ESP32 Firmware (PlatformIO)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Unique job id from web backend"
+        required: true
+      project_zip_url:
+        description: "URL to download project zip (must contain platformio.ini at root or in one subfolder)"
+        required: true
+      pio_env:
+        description: "PlatformIO environment name to build (leave empty to build default/all)"
+        required: false
+        default: ""
+      callback_url:
+        description: "Backend URL to POST result status/artifact info to"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report start
+        if: ${{ github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"started\",\"run_id\":\"${{ github.run_id }}\"}" || true
+
+      - name: Download project zip
+        run: |
+          mkdir -p work/project
+          curl -sL "${{ github.event.inputs.project_zip_url }}" -o work/project.zip
+          cd work && unzip -o project.zip -d project
+          ls -la project
+
+      - name: Locate platformio.ini
+        id: pio
+        run: |
+          PIO_DIR=$(find work/project -name "platformio.ini" -exec dirname {} \; | head -n1)
+          echo "dir=$PIO_DIR" >> $GITHUB_OUTPUT
+          echo "Found platformio.ini at: $PIO_DIR"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Build firmware
+        working-directory: ${{ steps.pio.outputs.dir }}
+        run: |
+          if [ -n "${{ github.event.inputs.pio_env }}" ]; then
+            pio run -e "${{ github.event.inputs.pio_env }}"
+          else
+            pio run
+          fi
+
+      - name: Collect build outputs
+        run: |
+          mkdir -p build-output
+          find "${{ steps.pio.outputs.dir }}/.pio/build" -maxdepth 2 -name "firmware.bin" -exec cp {} build-output/ \; || true
+          find "${{ steps.pio.outputs.dir }}/.pio/build" -maxdepth 2 -name "firmware.elf" -exec cp {} build-output/ \; || true
+          cd build-output
+          for f in *; do
+            mv "$f" "${{ github.event.inputs.job_id }}_$f" || true
+          done
+          ls -la
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.event.inputs.job_id }}
+          path: build-output/**
+          retention-days: 7
+
+      - name: Report success
+        if: ${{ success() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"success\",\"run_id\":\"${{ github.run_id }}\",\"artifact_name\":\"firmware-${{ github.event.inputs.job_id }}\"}" || true
+
+      - name: Report failure
+        if: ${{ failure() && github.event.inputs.callback_url != '' }}
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.event.inputs.job_id }}\",\"status\":\"failed\",\"run_id\":\"${{ github.run_id }}\"}" || true
